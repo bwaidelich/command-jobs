@@ -7,7 +7,7 @@ This library can be used to enqueue arbitrary commands that need to be executed 
 - database migrations
 - data fixtures / transformations
 - one-time bug fixes
-- ...
+- ....
 
 ## Usage
 

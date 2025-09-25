@@ -1,0 +1,122 @@
+#!/usr/bin/env php
+<?php
+declare(strict_types=1);
+
+use Psr\Clock\ClockInterface;
+use Symfony\Component\Console\Application;
+use Symfony\Component\Console\Command\Command;
+use Symfony\Component\Console\Helper\QuestionHelper;
+use Symfony\Component\Console\Input\InputArgument;
+use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
+use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Question\ChoiceQuestion;
+use Symfony\Component\Console\Question\Question;
+use wwwision\commandJobs\commandDefinition\CommandDefinitionId;
+use wwwision\commandJobs\commandDefinition\CommandWithArguments;
+use wwwision\commandJobs\CommandJobsApp;
+use wwwision\commandJobs\commandJobsEvent\CommandJobsEvent;
+use wwwision\commandJobs\commandJobsEvent\CommandJobsEventSeverity;
+use wwwision\commandJobs\ports\commandDefinitionRepository\YamlCommandDefinitionRepository;
+use wwwision\commandJobs\ports\commandExecutor\SymfonyProcessCommandExecutor;
+use wwwision\commandJobs\ports\commandJobRepository\YamlCommandJobRepository;
+use wwwision\commandJobs\ports\commandResultRepository\YamlCommandResultRepository;
+
+include $_composer_autoload_path ?? (__DIR__ . '/../vendor/autoload.php');
+
+$cli = new Application('One-Time Commands CLI', '1.0.0');
+$cli
+    ->register('run')
+    ->setDescription('Run pending commands')
+    ->addOption('root', 'r', InputOption::VALUE_REQUIRED, 'Root directory')
+    ->addOption('stop-on-error', mode: InputOption::VALUE_NONE, description: 'Intercept execution upon errors')
+    ->setCode(function (InputInterface $input, OutputInterface $output): int {
+        $commandResults = createApp($input, $output)->runPendingJobs($input->getOption('stop-on-error') ?? false);
+        return $commandResults->hasFailed() ? Command::FAILURE : Command::SUCCESS;
+    });
+$cli
+    ->register('add-definition')
+    ->setDescription('Add a new command definition')
+    ->addOption('root', 'r', InputOption::VALUE_REQUIRED, 'Root directory')
+    ->addArgument('id', InputArgument::OPTIONAL, 'ID of the command definition')
+    ->addArgument('description', InputArgument::OPTIONAL, 'Description of the command definition')
+    ->addArgument('cmd', InputArgument::IS_ARRAY, 'The command to execute (command and arguments, separated by spaces)')
+    ->setCode(function (InputInterface $input, OutputInterface $output): int {
+        $id = $input->getArgument('id') ?? (new QuestionHelper())->ask($input, $output, new Question('ID of the command definition: '));
+        if ($id === null) {
+            $output->writeln('<error>Missing id, aborting</error>');
+            return Command::FAILURE;
+        }
+        $description = $input->getArgument('description') ?? (new QuestionHelper())->ask($input, $output, new Question('Description of the command definition: '));
+        if ($description === null) {
+            $output->writeln('<error>Missing description, aborting</error>');
+            return Command::FAILURE;
+        }
+        $cmdArguments = $input->getArgument('cmd');
+        if (!empty($cmdArguments)) {
+            $cmd = CommandWithArguments::fromParts($cmdArguments);
+        } else {
+            $cmdArgument = new QuestionHelper()->ask($input, $output, new Question('The command to execute (command and arguments, separated by spaces): '));
+            if ($cmdArgument === null) {
+                $output->writeln('<error>Missing command, aborting</error>');
+                return Command::FAILURE;
+            }
+            $cmd = CommandWithArguments::fromString($cmdArgument);
+        }
+        createApp($input, $output)->addCommandDefinition(CommandDefinitionId::fromString($id), $description, $cmd);
+        if ($output->isVerbose()) {
+            $output->writeln('<info>Added command definition "' . $id . '"</info>');
+        }
+        return Command::SUCCESS;
+    });
+
+$cli
+    ->register('add-job')
+    ->setDescription('Enqueue a new command to be executed')
+    ->addOption('root', 'r', InputOption::VALUE_REQUIRED, 'Root directory')
+    ->addArgument('definition', InputArgument::OPTIONAL, 'ID of the command definition')
+    ->setCode(function (InputInterface $input, OutputInterface $output): int {
+        $app = createApp($input, $output);
+        $definitionId = $input->getArgument('definition') ?? (new QuestionHelper())->ask($input, $output, new ChoiceQuestion('ID of the command definition: ', $app->commandDefinitionIds()));
+        $commandJob = $app->addCommandJob(CommandDefinitionId::fromString($definitionId));
+        if ($output->isVerbose()) {
+            $output->writeln(sprintf('<info>Enqueued command "%s" for "%s"</info>', $definitionId, $commandJob->id->value));
+        }
+        return Command::SUCCESS;
+    });
+
+$cli->run();
+
+function createApp(InputInterface $input, OutputInterface $output): CommandJobsApp {
+    $rootPath = rtrim($input->getOption('root') ?? (rtrim(getcwd(), '/') . '/command-jobs'), '/');
+    if (!is_dir($rootPath)) {
+        if (!mkdir($rootPath, 0777, true) && !is_dir($rootPath)) {
+            throw new RuntimeException(sprintf('Directory "%s" was not created', $rootPath));
+        }
+        file_put_contents($rootPath . '/.gitignore', 'commandResults.yaml');
+    }
+    $app = new CommandJobsApp(
+        commandDefinitionRepository: new YamlCommandDefinitionRepository($rootPath . '/commandDefinitions.yaml'),
+        commandJobRepository: new YamlCommandJobRepository($rootPath . '/commandJobs.yaml'),
+        commandResultRepository: new YamlCommandResultRepository($rootPath . '/commandResults.yaml'),
+        commandExecutor: new SymfonyProcessCommandExecutor(),
+        clock: new class implements ClockInterface {
+            public function now(): DateTimeImmutable
+            {
+                return new DateTimeImmutable();
+            }
+        }
+    );
+    $app->onEvent(function (CommandJobsEvent $event) use ($output) {
+        if ($event->severity() === CommandJobsEventSeverity::DEBUG && !$output->isVerbose()) {
+            return;
+        }
+        $tag = match ($event->severity()) {
+            CommandJobsEventSeverity::DEBUG => 'comment',
+            CommandJobsEventSeverity::INFO => 'info',
+            CommandJobsEventSeverity::ERROR => 'error',
+        };
+        $output->writeln(sprintf('<%s>%s</>', $tag, $event));
+    });
+    return $app;
+}

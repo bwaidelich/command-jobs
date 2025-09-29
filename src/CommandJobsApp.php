@@ -11,12 +11,10 @@ use RuntimeException;
 use Throwable;
 use wwwision\commandJobs\commandDefinition\CommandDefinition;
 use wwwision\commandJobs\commandDefinition\CommandDefinitionId;
-use wwwision\commandJobs\commandDefinition\CommandDefinitions;
 use wwwision\commandJobs\commandDefinition\CommandWithArguments;
 use wwwision\commandJobs\commandJob\CommandJob;
 use wwwision\commandJobs\commandJob\CommandJobId;
 use wwwision\commandJobs\commandJobsEvent\CommandExecuted;
-use wwwision\commandJobs\commandJobsEvent\CommandExecutionFailed;
 use wwwision\commandJobs\commandJobsEvent\CommandJobsEvent;
 use wwwision\commandJobs\commandJobsEvent\RunEnded;
 use wwwision\commandJobs\commandJobsEvent\RunStarted;
@@ -32,7 +30,7 @@ final class CommandJobsApp
     /**
      * @var array<Closure(CommandJobsEvent): void>
      */
-    private $eventHandlers = [];
+    private array $eventHandlers = [];
 
     public function __construct(
         private readonly CommandDefinitionRepository $commandDefinitionRepository,

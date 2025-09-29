@@ -2,6 +2,8 @@
 <?php
 declare(strict_types=1);
 
+use Doctrine\DBAL\DriverManager;
+use Doctrine\DBAL\Tools\DsnParser;
 use Psr\Clock\ClockInterface;
 use Symfony\Component\Console\Application;
 use Symfony\Component\Console\Command\Command;
@@ -12,6 +14,7 @@ use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Question\ChoiceQuestion;
 use Symfony\Component\Console\Question\Question;
+use Symfony\Component\Yaml\Yaml;
 use wwwision\commandJobs\commandDefinition\CommandDefinitionId;
 use wwwision\commandJobs\commandDefinition\CommandWithArguments;
 use wwwision\commandJobs\CommandJobsApp;
@@ -20,85 +23,131 @@ use wwwision\commandJobs\commandJobsEvent\CommandJobsEventSeverity;
 use wwwision\commandJobs\ports\commandDefinitionRepository\YamlCommandDefinitionRepository;
 use wwwision\commandJobs\ports\commandExecutor\SymfonyProcessCommandExecutor;
 use wwwision\commandJobs\ports\commandJobRepository\YamlCommandJobRepository;
+use wwwision\commandJobs\ports\commandResultRepository\DbalCommandResultRepository;
 use wwwision\commandJobs\ports\commandResultRepository\YamlCommandResultRepository;
 
 include $_composer_autoload_path ?? (__DIR__ . '/../vendor/autoload.php');
 
 $cli = new Application('One-Time Commands CLI', '1.0.0');
 $cli
-    ->register('run')
-    ->setDescription('Run pending commands')
-    ->addOption('root', 'r', InputOption::VALUE_REQUIRED, 'Root directory')
-    ->addOption('stop-on-error', mode: InputOption::VALUE_NONE, description: 'Intercept execution upon errors')
-    ->setCode(function (InputInterface $input, OutputInterface $output): int {
-        $commandResults = createApp($input, $output)->runPendingJobs($input->getOption('stop-on-error') ?? false);
-        return $commandResults->hasFailed() ? Command::FAILURE : Command::SUCCESS;
-    });
+        ->register('run')
+        ->setDescription('Run pending commands')
+        ->addOption('root', 'r', InputOption::VALUE_REQUIRED, 'Root directory')
+        ->addOption('stop-on-error', mode: InputOption::VALUE_NONE, description: 'Intercept execution upon errors')
+        ->setCode(function (InputInterface $input, OutputInterface $output): int {
+            $commandResults = createApp($input, $output)->runPendingJobs($input->getOption('stop-on-error') ?? false);
+            return $commandResults->hasFailed() ? Command::FAILURE : Command::SUCCESS;
+        });
 $cli
-    ->register('add-definition')
-    ->setDescription('Add a new command definition')
-    ->addOption('root', 'r', InputOption::VALUE_REQUIRED, 'Root directory')
-    ->addArgument('id', InputArgument::OPTIONAL, 'ID of the command definition')
-    ->addArgument('description', InputArgument::OPTIONAL, 'Description of the command definition')
-    ->addArgument('cmd', InputArgument::IS_ARRAY, 'The command to execute (command and arguments, separated by spaces)')
-    ->setCode(function (InputInterface $input, OutputInterface $output): int {
-        $id = $input->getArgument('id') ?? (new QuestionHelper())->ask($input, $output, new Question('ID of the command definition: '));
-        if ($id === null) {
-            $output->writeln('<error>Missing id, aborting</error>');
-            return Command::FAILURE;
-        }
-        $description = $input->getArgument('description') ?? (new QuestionHelper())->ask($input, $output, new Question('Description of the command definition: '));
-        if ($description === null) {
-            $output->writeln('<error>Missing description, aborting</error>');
-            return Command::FAILURE;
-        }
-        $cmdArguments = $input->getArgument('cmd');
-        if (!empty($cmdArguments)) {
-            $cmd = CommandWithArguments::fromParts($cmdArguments);
-        } else {
-            $cmdArgument = new QuestionHelper()->ask($input, $output, new Question('The command to execute (command and arguments, separated by spaces): '));
-            if ($cmdArgument === null) {
-                $output->writeln('<error>Missing command, aborting</error>');
+        ->register('add-definition')
+        ->setDescription('Add a new command definition')
+        ->addOption('root', 'r', InputOption::VALUE_REQUIRED, 'Root directory')
+        ->addArgument('id', InputArgument::OPTIONAL, 'ID of the command definition')
+        ->addArgument('description', InputArgument::OPTIONAL, 'Description of the command definition')
+        ->addArgument('cmd', InputArgument::IS_ARRAY, 'The command to execute (command and arguments, separated by spaces)')
+        ->setCode(function (InputInterface $input, OutputInterface $output): int {
+            $id = $input->getArgument('id') ?? (new QuestionHelper())->ask($input, $output, new Question('ID of the command definition: '));
+            if ($id === null) {
+                $output->writeln('<error>Missing id, aborting</error>');
                 return Command::FAILURE;
             }
-            $cmd = CommandWithArguments::fromString($cmdArgument);
-        }
-        createApp($input, $output)->addCommandDefinition(CommandDefinitionId::fromString($id), $description, $cmd);
-        if ($output->isVerbose()) {
-            $output->writeln('<info>Added command definition "' . $id . '"</info>');
-        }
-        return Command::SUCCESS;
-    });
+            $description = $input->getArgument('description') ?? (new QuestionHelper())->ask($input, $output, new Question('Description of the command definition: '));
+            if ($description === null) {
+                $output->writeln('<error>Missing description, aborting</error>');
+                return Command::FAILURE;
+            }
+            $cmdArguments = $input->getArgument('cmd');
+            if (!empty($cmdArguments)) {
+                $cmd = CommandWithArguments::fromParts($cmdArguments);
+            } else {
+                $cmdArgument = new QuestionHelper()->ask($input, $output, new Question('The command to execute (command and arguments, separated by spaces): '));
+                if ($cmdArgument === null) {
+                    $output->writeln('<error>Missing command, aborting</error>');
+                    return Command::FAILURE;
+                }
+                $cmd = CommandWithArguments::fromString($cmdArgument);
+            }
+            createApp($input, $output)->addCommandDefinition(CommandDefinitionId::fromString($id), $description, $cmd);
+            if ($output->isVerbose()) {
+                $output->writeln('<info>Added command definition "' . $id . '"</info>');
+            }
+            return Command::SUCCESS;
+        });
 
 $cli
-    ->register('add-job')
-    ->setDescription('Enqueue a new command to be executed')
-    ->addOption('root', 'r', InputOption::VALUE_REQUIRED, 'Root directory')
-    ->addArgument('definition', InputArgument::OPTIONAL, 'ID of the command definition')
-    ->setCode(function (InputInterface $input, OutputInterface $output): int {
-        $app = createApp($input, $output);
-        $definitionId = $input->getArgument('definition') ?? (new QuestionHelper())->ask($input, $output, new ChoiceQuestion('ID of the command definition: ', $app->commandDefinitionIds()));
-        $commandJob = $app->addCommandJob(CommandDefinitionId::fromString($definitionId));
-        if ($output->isVerbose()) {
-            $output->writeln(sprintf('<info>Enqueued command "%s" for "%s"</info>', $definitionId, $commandJob->id->value));
-        }
-        return Command::SUCCESS;
-    });
+        ->register('add-job')
+        ->setDescription('Enqueue a new command to be executed')
+        ->addOption('root', 'r', InputOption::VALUE_REQUIRED, 'Root directory')
+        ->addArgument('definition', InputArgument::OPTIONAL, 'ID of the command definition')
+        ->setCode(function (InputInterface $input, OutputInterface $output): int {
+            $app = createApp($input, $output);
+            $commandDefinitionIds = $app->commandDefinitionIds();
+            if ($commandDefinitionIds === []) {
+                throw new RuntimeException('In order to add jobs, a corresponding definition has to be added first via `add-definition`');
+            }
+            $definitionId = $input->getArgument('definition') ?? (new QuestionHelper())->ask($input, $output, new ChoiceQuestion('ID of the command definition: ', $commandDefinitionIds));
+            $commandJob = $app->addCommandJob(CommandDefinitionId::fromString($definitionId));
+            if ($output->isVerbose()) {
+                $output->writeln(sprintf('<info>Enqueued command "%s" for "%s"</info>', $definitionId, $commandJob->id->value));
+            }
+            return Command::SUCCESS;
+        });
 
 $cli->run();
 
-function createApp(InputInterface $input, OutputInterface $output): CommandJobsApp {
+function createApp(InputInterface $input, OutputInterface $output): CommandJobsApp
+{
+    $dsn = (string)getenv('COMMAND_JOBS_DSN');
     $rootPath = rtrim($input->getOption('root') ?? (rtrim(getcwd(), '/') . '/command-jobs'), '/');
     if (!is_dir($rootPath)) {
         if (!mkdir($rootPath, 0777, true) && !is_dir($rootPath)) {
             throw new RuntimeException(sprintf('Directory "%s" was not created', $rootPath));
         }
-        file_put_contents($rootPath . '/.gitignore', 'commandResults.yaml');
+        if (empty($dsn)) {
+            file_put_contents($rootPath . '/.gitignore', 'commandResults.yaml');
+        }
     }
+    if (!file_exists($rootPath . '/config.yaml')) {
+        file_put_contents($rootPath . '/config.yaml', Yaml::dump([
+            'commandResults' => [
+                'storage' => 'filesystem',
+                'options' => [
+                    'path' => $rootPath . '/commandResults.yaml',
+                ],
+            ]
+        ]));
+    }
+    $config = Yaml::parse(file_get_contents($rootPath . '/config.yaml'));
+    if (!isset($config['commandResults']['storage'])) {
+        throw new RuntimeException('Missing "commandResults.storage" configuration');
+    }
+    $storage = resolveEnvPlaceholders($config['commandResults']['storage']);
+    if ($storage === 'database') {
+        if (!class_exists(DriverManager::class)) {
+            throw new RuntimeException('If used with the "database" storage, the doctrine/dbal package has to be installed');
+        }
+        if (empty($config['commandResults']['options']['dsn'])) {
+            throw new RuntimeException('If used with the "database" storage, the "commandResults.options.dsn" option must be set');
+        }
+        $dsn = resolveEnvPlaceholders($config['commandResults']['options']['dsn']);
+        try {
+            $connection = DriverManager::getConnection(new DsnParser()->parse($dsn));
+        } catch (Throwable $e) {
+            throw new RuntimeException('Could not connect to database: ' . $e->getMessage());
+        }
+        $commandResultsTableName = !empty($config['commandResults']['options']['tableName']) ? resolveEnvPlaceholders($config['commandResults']['options']['tableName']) : 'command_jobs_results';
+        $commandResultRepository = new DbalCommandResultRepository($connection, $commandResultsTableName);
+    } elseif ($storage === 'filesystem') {
+        $yamlFilePath = !empty($config['commandResults']['options']['path']) ? resolveEnvPlaceholders($config['commandResults']['options']['path']) : $rootPath . '/commandResults.yaml';
+        $commandResultRepository = new YamlCommandResultRepository($yamlFilePath);
+    } else {
+        throw new RuntimeException(sprintf('Unsupported "commandResults.storage" type "%s", allowed values are: "database", "filesystem"', $storage));
+    }
+
     $app = new CommandJobsApp(
         commandDefinitionRepository: new YamlCommandDefinitionRepository($rootPath . '/commandDefinitions.yaml'),
         commandJobRepository: new YamlCommandJobRepository($rootPath . '/commandJobs.yaml'),
-        commandResultRepository: new YamlCommandResultRepository($rootPath . '/commandResults.yaml'),
+        commandResultRepository: $commandResultRepository,
         commandExecutor: new SymfonyProcessCommandExecutor(),
         clock: new class implements ClockInterface {
             public function now(): DateTimeImmutable
@@ -119,4 +168,15 @@ function createApp(InputInterface $input, OutputInterface $output): CommandJobsA
         $output->writeln(sprintf('<%s>%s</>', $tag, $event));
     });
     return $app;
+}
+
+function resolveEnvPlaceholders(string $value): string {
+    $pattern = '/%env\(([A-Z0-9_]+)(?::([^)]*))?\)%/i';
+    return preg_replace_callback($pattern, static function ($matches) {
+        $env = getenv($matches[1]);
+        if ($env !== false && $env !== '') {
+            return $env;
+        }
+        return $matches[2] ?? '';
+    }, $value);
 }

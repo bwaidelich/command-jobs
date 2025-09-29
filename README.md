@@ -23,6 +23,35 @@ and run pending command jobs via
 vendor/bin/command-jobs run
 ```
 
+## Configuration
+
+Upon first run, the CLI will create a `config.yaml` file in the root folder with the following contents:
+
+```yaml
+commandResults:
+  storage: filesystem
+  options:
+    path: /some/path/to/commandResults.yaml
+```
+
+> [!NOTE]  
+> All configuration options allow to refer to environment variables in the form `%env(SOME_VARIABLE)%`
+
+### Store command results in a database
+
+To store command results in a MySQL/MariaDB database, the following configuration can be used:
+
+```yaml
+commandResults:
+  storage: database
+  options:
+    dsn: '%env(DATABASE_URL)%'
+    tableName: command_jobs_results
+```
+
+> [!NOTE]  
+> If the `database` storage is configured, the `doctrine/dbal` package has to be installed
+
 ### Options
 
 #### `root`

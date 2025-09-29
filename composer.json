@@ -33,6 +33,9 @@
     "squizlabs/php_codesniffer": "^4.0.x-dev",
     "phpunit/phpunit": "^12.3"
   },
+  "suggest": {
+    "doctrine/dbal": "Required for the database adapter"
+  },
   "autoload": {
     "psr-4": {
       "wwwision\\commandJobs\\": "src/"

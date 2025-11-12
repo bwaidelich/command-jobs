@@ -10,6 +10,7 @@ use Throwable;
 use Webmozart\Assert\Assert;
 use wwwision\commandJobs\commandDefinition\CommandDefinition;
 use wwwision\commandJobs\commandDefinition\CommandDefinitionId;
+use wwwision\commandJobs\commandDefinition\CommandDefinitionOptions;
 use wwwision\commandJobs\commandDefinition\CommandDefinitions;
 use wwwision\commandJobs\commandDefinition\CommandWithArguments;
 
@@ -49,6 +50,7 @@ final readonly class YamlCommandDefinitionRepository implements CommandDefinitio
         $definitions[$commandDefinition->id->value] = [
             'description' => $commandDefinition->description,
             'cmd' => $commandDefinition->cmd->toArray(),
+            'options' => $commandDefinition->options->toSimpleArray(),
         ];
         file_put_contents($this->yamlFilePath, Yaml::dump($definitions));
     }
@@ -60,10 +62,13 @@ final readonly class YamlCommandDefinitionRepository implements CommandDefinitio
     {
         Assert::string($definition['description']);
         Assert::isList($definition['cmd']);
+        $options = $definition['options'] ?? [];
+        Assert::isMap($options);
         return new CommandDefinition(
             CommandDefinitionId::fromString($id),
             $definition['description'],
             CommandWithArguments::fromParts($definition['cmd']),
+            CommandDefinitionOptions::create(...$options), // @phpstan-ignore argument.type
         );
     }
 

@@ -11,6 +11,7 @@ use RuntimeException;
 use Throwable;
 use wwwision\commandJobs\commandDefinition\CommandDefinition;
 use wwwision\commandJobs\commandDefinition\CommandDefinitionId;
+use wwwision\commandJobs\commandDefinition\CommandDefinitionOptions;
 use wwwision\commandJobs\commandDefinition\CommandWithArguments;
 use wwwision\commandJobs\commandJob\CommandJob;
 use wwwision\commandJobs\commandJob\CommandJobId;
@@ -75,13 +76,13 @@ final class CommandJobsApp
         return $result;
     }
 
-    public function addCommandDefinition(CommandDefinitionId $commandDefinitionId, string $description, CommandWithArguments $commandWithArguments): CommandDefinition
+    public function addCommandDefinition(CommandDefinitionId $commandDefinitionId, string $description, CommandWithArguments $commandWithArguments, CommandDefinitionOptions $options): CommandDefinition
     {
         $existingCommandDefinition = $this->commandDefinitionRepository->findById($commandDefinitionId);
         if ($existingCommandDefinition !== null) {
             throw new InvalidArgumentException(sprintf('Command definition "%s" already exists.', $commandDefinitionId->value), 1758629259);
         }
-        $commandDefinition = new CommandDefinition($commandDefinitionId, $description, $commandWithArguments);
+        $commandDefinition = new CommandDefinition($commandDefinitionId, $description, $commandWithArguments, $options);
         $this->commandDefinitionRepository->add($commandDefinition);
         return $commandDefinition;
     }
@@ -105,7 +106,7 @@ final class CommandJobsApp
         }
         $executionTime = $this->clock->now();
         try {
-            $output = trim($this->commandExecutor->run($commandDefinition->cmd));
+            $output = trim($this->commandExecutor->run($commandDefinition->cmd, $commandDefinition->options));
             $commandResult = new CommandResult(
                 commandJobId: $commandJob->id,
                 commandDefinitionId: $commandDefinition->id,

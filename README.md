@@ -87,6 +87,7 @@ Arguments:
 
 Options:
   -r, --root=ROOT       Root directory
+      --timeout=TIMEOUT  Timeout (in seconds) for the command to run
   -h, --help            Display help for the given command. When no command is given display help for the list command
       --silent          Do not output any message
   -q, --quiet           Only errors are displayed. All other output is suppressed

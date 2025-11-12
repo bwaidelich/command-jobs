@@ -10,6 +10,7 @@ final readonly class CommandDefinition
         public CommandDefinitionId $id,
         public string $description,
         public CommandWithArguments $cmd,
+        public CommandDefinitionOptions $options,
     ) {
     }
 }

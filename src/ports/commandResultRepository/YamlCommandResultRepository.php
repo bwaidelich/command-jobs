@@ -82,6 +82,7 @@ final readonly class YamlCommandResultRepository implements CommandResultReposit
             throw new RuntimeException(sprintf('Failed to load command definitions from "%s": %s', $this->yamlFilePath, $e->getMessage()), 1758202300, $e);
         }
         Assert::isList($result);
+        Assert::allIsArray($result);
         return $result;
     }
 }

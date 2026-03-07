@@ -62,6 +62,7 @@ final readonly class YamlCommandDefinitionRepository implements CommandDefinitio
     {
         Assert::string($definition['description']);
         Assert::isList($definition['cmd']);
+        Assert::allString($definition['cmd']);
         $options = $definition['options'] ?? [];
         Assert::isMap($options);
         return new CommandDefinition(

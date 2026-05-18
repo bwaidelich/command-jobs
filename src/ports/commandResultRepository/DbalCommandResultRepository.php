@@ -7,7 +7,9 @@ namespace wwwision\commandJobs\ports\commandResultRepository;
 use DateTimeImmutable;
 use Doctrine\DBAL\Connection;
 use Doctrine\DBAL\Exception as DbalException;
-use Doctrine\DBAL\Platforms\AbstractMySQLPlatform;
+use Doctrine\DBAL\Platforms\AbstractPlatform;
+use Doctrine\DBAL\Schema\Table;
+use Doctrine\DBAL\Types\Type;
 use Doctrine\DBAL\Types\Types;
 use RuntimeException;
 use Webmozart\Assert\Assert;
@@ -18,38 +20,38 @@ use wwwision\commandJobs\commandResult\CommandResults;
 
 final readonly class DbalCommandResultRepository implements CommandResultRepository
 {
-    private const COLUMN_TYPES = [
-        'execution_time' => Types::DATETIME_IMMUTABLE,
-        'success' => Types::BOOLEAN,
-    ];
+    private AbstractPlatform $platform;
 
     public function __construct(
         private Connection $connection,
         private string $tableName,
     ) {
-        $this->verifyPlatform();
-        $this->connection->executeStatement(<<<SQL
-            CREATE TABLE IF NOT EXISTS `$tableName` (
-              `command_job_id` VARCHAR(14) NOT NULL,
-              `command_definition_id` VARCHAR(255) NOT NULL,
-              `execution_time` DATETIME NOT NULL,
-              `execution_duration_in_milliseconds` INT(11) NOT NULL,
-              `success` TINYINT(1) NOT NULL,
-              `output` TEXT NOT NULL,
-              KEY `command_job_id` (`command_job_id`,`command_definition_id`)
-            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-            SQL);
+        try {
+            $this->platform = $this->connection->getDatabasePlatform();
+        } catch (DbalException $e) {
+            throw new RuntimeException(sprintf('Failed to determine database platform: %s', $e->getMessage()), 1779106876, $e);
+        }
+        $this->createTableIfNotExists();
     }
 
-    private function verifyPlatform(): void
+    private function createTableIfNotExists(): void
     {
         try {
-            $platform = $this->connection->getDatabasePlatform();
+            $schemaManager = $this->connection->createSchemaManager();
+            if ($schemaManager->tablesExist([$this->tableName])) {
+                return;
+            }
+            $table = new Table($this->tableName);
+            $table->addColumn('command_job_id', Types::STRING, ['length' => 14, 'notnull' => true]);
+            $table->addColumn('command_definition_id', Types::STRING, ['length' => 255, 'notnull' => true]);
+            $table->addColumn('execution_time', Types::DATETIME_IMMUTABLE, ['notnull' => true]);
+            $table->addColumn('execution_duration_in_milliseconds', Types::INTEGER, ['notnull' => true]);
+            $table->addColumn('success', Types::BOOLEAN, ['notnull' => true]);
+            $table->addColumn('output', Types::TEXT, ['notnull' => true]);
+            $table->addIndex(['command_job_id', 'command_definition_id']);
+            $schemaManager->createTable($table);
         } catch (DbalException $e) {
-            throw new RuntimeException(sprintf('Failed to verify database platform: %s', $e->getMessage()), 1759142550, $e);
-        }
-        if (!$platform instanceof AbstractMySQLPlatform) {
-            throw new RuntimeException('This adapter only supports MySQL/MariaDB compatible databases', 1759142553);
+            throw new RuntimeException(sprintf('Failed to create table %s: %s', $this->tableName, $e->getMessage()), 1759142550, $e);
         }
     }
 
@@ -60,7 +62,7 @@ final readonly class DbalCommandResultRepository implements CommandResultReposit
         } catch (DbalException $e) {
             throw new RuntimeException(sprintf('Failed to obtain command results from database: %s', $e->getMessage()), 1759142740, $e);
         }
-        return CommandResults::fromArray(array_map(self::convertResult(...), $rows));
+        return CommandResults::fromArray(array_map($this->convertResult(...), $rows));
     }
 
     public function add(CommandResult $commandResult): void
@@ -73,7 +75,10 @@ final readonly class DbalCommandResultRepository implements CommandResultReposit
                 'execution_duration_in_milliseconds' => $commandResult->executionDurationInMilliseconds,
                 'success' => $commandResult->success,
                 'output' => $commandResult->output,
-            ], self::COLUMN_TYPES);
+            ], [
+                'execution_time' => Types::DATETIME_IMMUTABLE,
+                'success' => Types::BOOLEAN,
+            ]);
         } catch (DbalException $e) {
             throw new RuntimeException(sprintf('Failed to save command result to database: %s', $e->getMessage()), 1759142755, $e);
         }
@@ -82,22 +87,23 @@ final readonly class DbalCommandResultRepository implements CommandResultReposit
     /**
      * @param array<mixed> $result
      */
-    private static function convertResult(array $result): CommandResult
+    private function convertResult(array $result): CommandResult
     {
         Assert::string($result['command_job_id']);
         Assert::string($result['command_definition_id']);
         Assert::string($result['execution_time']);
-        $executionTime = DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $result['execution_time']);
+        $executionTime = Type::getType(Types::DATETIME_IMMUTABLE)->convertToPHPValue($result['execution_time'], $this->platform);
         Assert::isInstanceOf($executionTime, DateTimeImmutable::class);
         Assert::numeric($result['execution_duration_in_milliseconds']);
-        Assert::numeric($result['success']);
+        $success = Type::getType(Types::BOOLEAN)->convertToPHPValue($result['success'], $this->platform);
+        Assert::boolean($success);
         Assert::string($result['output']);
         return new CommandResult(
             commandJobId: CommandJobId::fromString($result['command_job_id']),
             commandDefinitionId: CommandDefinitionId::fromString($result['command_definition_id']),
             executionTime: $executionTime,
             executionDurationInMilliseconds: (int)$result['execution_duration_in_milliseconds'],
-            success: (bool)$result['success'],
+            success: $success,
             output: $result['output'],
         );
     }

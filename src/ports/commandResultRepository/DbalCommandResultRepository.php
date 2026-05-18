@@ -20,10 +20,17 @@ use wwwision\commandJobs\commandResult\CommandResults;
 
 final readonly class DbalCommandResultRepository implements CommandResultRepository
 {
+    private AbstractPlatform $platform;
+
     public function __construct(
         private Connection $connection,
         private string $tableName,
     ) {
+        try {
+            $this->platform = $this->connection->getDatabasePlatform();
+        } catch (DbalException $e) {
+            throw new RuntimeException(sprintf('Failed to determine database platform: %s', $e->getMessage()), 1779106876, $e);
+        }
         $this->createTableIfNotExists();
     }
 
@@ -52,11 +59,10 @@ final readonly class DbalCommandResultRepository implements CommandResultReposit
     {
         try {
             $rows = $this->connection->fetchAllAssociative('SELECT * FROM ' . $this->connection->quoteIdentifier($this->tableName));
-            $platform = $this->connection->getDatabasePlatform();
         } catch (DbalException $e) {
             throw new RuntimeException(sprintf('Failed to obtain command results from database: %s', $e->getMessage()), 1759142740, $e);
         }
-        return CommandResults::fromArray(array_map(static fn (array $row) => self::convertResult($row, $platform), $rows));
+        return CommandResults::fromArray(array_map($this->convertResult(...), $rows));
     }
 
     public function add(CommandResult $commandResult): void
@@ -81,15 +87,15 @@ final readonly class DbalCommandResultRepository implements CommandResultReposit
     /**
      * @param array<mixed> $result
      */
-    private static function convertResult(array $result, AbstractPlatform $platform): CommandResult
+    private function convertResult(array $result): CommandResult
     {
         Assert::string($result['command_job_id']);
         Assert::string($result['command_definition_id']);
         Assert::string($result['execution_time']);
-        $executionTime = Type::getType(Types::DATETIME_IMMUTABLE)->convertToPHPValue($result['execution_time'], $platform);
+        $executionTime = Type::getType(Types::DATETIME_IMMUTABLE)->convertToPHPValue($result['execution_time'], $this->platform);
         Assert::isInstanceOf($executionTime, DateTimeImmutable::class);
         Assert::numeric($result['execution_duration_in_milliseconds']);
-        $success = Type::getType(Types::BOOLEAN)->convertToPHPValue($result['success'], $platform);
+        $success = Type::getType(Types::BOOLEAN)->convertToPHPValue($result['success'], $this->platform);
         Assert::boolean($success);
         Assert::string($result['output']);
         return new CommandResult(
